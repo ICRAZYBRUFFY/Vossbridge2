@@ -206,7 +206,7 @@ body.pad .tb{display:none}
   <p id="loadText">Starting…</p>
   <div class="bar"><i id="loadBar"></i></div>
   <div id="startBtns" hidden><button id="btnContinue">Continue</button><button id="btnNew">New game</button></div>
-  <p class="small">Touch · Xbox controller · keyboard and mouse<br>Version 1.7.1</p>
+  <p class="small">Touch · Xbox controller · keyboard and mouse<br>Version 1.7.3</p>
 </div>
 <div id="fatal" hidden></div>
 <div id="rotate">Turn your phone sideways for the best view</div>
@@ -220,7 +220,7 @@ body.pad .tb{display:none}
 const OW = (typeof globalThis !== 'undefined' ? globalThis : window).OW || {};
 (typeof globalThis !== 'undefined' ? globalThis : window).OW = OW;
 
-OW.VERSION = '1.7.1';
+OW.VERSION = '1.7.3';
 
 // Prop colliders from chunk generation are flat Float32Arrays of records:
 //   x, z, r, y0, ytop, ycan, cr, kind, v0, vn, i0, in
@@ -4968,6 +4968,16 @@ void main(){
     const keep = typeof location !== 'undefined' && /[?&]shot/.test(location.search); // tests need readable frames
     gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: keep });
     if (!gl) throw new Error('WebGL2 is not available on this browser.');
+    // if the browser drops the graphics context (out of GPU memory) the picture goes white: save and restart the page
+    canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      try {
+        if (OW.Save && OW.Save.write) OW.Save.write();
+        const n = +(sessionStorage.getItem('ow_ctxlost') || 0);
+        if (n < 3) { sessionStorage.setItem('ow_ctxlost', String(n + 1)); const q = document.getElementById('toast'); setTimeout(() => { const u = new URL(location.href); u.searchParams.set('autostart', '1'); location.replace(u.toString()); }, 400); }
+        else { try { OW.Settings.set('quality', 'low'); } catch (err) { /* ignore */ } }
+      } catch (err) { /* ignore */ }
+    });
     prog = link(VS, FS);
     skyProg = link(SKY_VS, SKY_FS);
     for (const n of ['u_vp', 'u_model', 'u_time', 'u_sunDir', 'u_sunCol', 'u_skyCol', 'u_horizonCol', 'u_groundCol', 'u_fogCol', 'u_cam',
@@ -5559,16 +5569,38 @@ OW.Input = (() => {
     for (const f of listeners) f(d);
   }
 
+  // Some console browsers (the Xbox one) turn the controller into key events with
+  // the Windows gamepad key codes instead of exposing the Gamepad API. Build a
+  // virtual pad from those so the rest of the input code works unchanged.
+  const XKEY = { 195: 0, 196: 1, 197: 2, 198: 3, 200: 4, 199: 5, 201: 6, 202: 7, 208: 8, 207: 9, 209: 10, 210: 11, 203: 12, 204: 13, 205: 14, 206: 15 };
+  const XSTICK = { 211: [1, -1], 212: [1, 1], 213: [0, 1], 214: [0, -1], 215: [3, -1], 216: [3, 1], 217: [2, 1], 218: [2, -1] };
+  const xDown = new Set();
+  let xSeen = 0;
+  const xName = { GamepadA: 195, GamepadB: 196, GamepadX: 197, GamepadY: 198, GamepadRightShoulder: 199, GamepadLeftShoulder: 200, GamepadLeftTrigger: 201, GamepadRightTrigger: 202, GamepadDPadUp: 203, GamepadDPadDown: 204, GamepadDPadLeft: 205, GamepadDPadRight: 206, GamepadMenu: 207, GamepadView: 208 };
+  function xCode(e) { const k = e.keyCode || e.which || 0; if (k >= 195 && k <= 218) return k; return xName[e.key] || 0; }
+  function virtualPad() {
+    if (!xSeen || performance.now() - xSeen > 600000) return null;
+    const buttons = Array.from({ length: 17 }, () => ({ pressed: false, value: 0 }));
+    const axes = [0, 0, 0, 0];
+    for (const k of xDown) {
+      if (XKEY[k] !== undefined) buttons[XKEY[k]] = { pressed: true, value: 1 };
+      if (XSTICK[k]) axes[XSTICK[k][0]] += XSTICK[k][1];
+    }
+    return { id: 'Xbox controller (browser keys)', index: 99, connected: true, mapping: 'standard', buttons, axes, virtual: true };
+  }
+
   function init(target) {
     window.addEventListener('keydown', (e) => {
+      const xc = xCode(e);
+      if (xc) { xDown.add(xc); xSeen = performance.now(); e.preventDefault(); return; }
       if (e.repeat) return;
       keysDown.add(e.code);
       keysTapped.add(e.code);
       setDevice('keyboard');
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) e.preventDefault();
     });
-    window.addEventListener('keyup', (e) => keysDown.delete(e.code));
-    window.addEventListener('blur', () => keysDown.clear());
+    window.addEventListener('keyup', (e) => { const xc = xCode(e); if (xc) { xDown.delete(xc); e.preventDefault(); return; } keysDown.delete(e.code); });
+    window.addEventListener('blur', () => { keysDown.clear(); xDown.clear(); });
     target.addEventListener('mousemove', (e) => {
       if (document.pointerLockElement === target) { state.mouseDX += e.movementX; state.mouseDY += e.movementY; }
     });
@@ -5596,6 +5628,8 @@ OW.Input = (() => {
 
   const disconnectListeners = [];
   function getPad() {
+    const vp = virtualPad();
+    if (vp) return vp;
     if (!navigator.getGamepads) return null;
     let pads; try { pads = navigator.getGamepads(); } catch (e) { return null; }
     const ok = (p) => p && p.connected !== false && p.buttons && p.buttons.length >= 10 && p.axes && p.axes.length >= 2;
@@ -5729,6 +5763,7 @@ OW.Input = (() => {
     init, poll, down, pressed, consume, setContext, glyph, rumble, state, touchAxes, touchButtons, touchTapped, settings,
     onDeviceChange: (f) => listeners.push(f), onDisconnect: (f) => disconnectListeners.push(f),
     get context() { return context; }, get device() { return device; },
+    virtualPad,
     get padConnected() { return !!getPad(); },
     get padName() { const p = getPad(); return p ? p.id : ''; },
     get vibrationSupported() { const p = getPad(); return !!(p && p.vibrationActuator); },
@@ -7934,7 +7969,7 @@ OW.Events = (() => {
 OW.Settings = (() => {
   const KEY = 'vossbridge_settings_v1';
   const DEFAULTS = {
-    quality: 'auto', dynamicRes: true, fpsCap: 30, sensFoot: 1.0, sensDrive: 1.0, aimAssist: true, invertY: false, deadzone: 0.15,
+    quality: 'low', dynamicRes: true, fpsCap: 30, sensFoot: 1.0, sensDrive: 1.0, aimAssist: true, invertY: false, deadzone: 0.15,
     touchSize: 1.0, touchOpacity: 0.55, vibration: true, volume: 0.7, units: 'mph', showFps: false, padBindings: null, timeScale: 1, traffic: true, encounters: true,
   };
   let s = Object.assign({}, DEFAULTS);
@@ -9917,7 +9952,7 @@ OW.Game = (() => {
 
   function applyQuality() {
     const q = OW.Settings.get('quality');
-    quality = q === 'auto' ? (isMobile() ? 'medium' : 'high') : q;
+    quality = QUALITY[q] ? q : 'low';
     const Q = QUALITY[quality];
     OW.Streaming.setQuality(Q.r0, Q.r1, Q.trees);
     maxScale = Q.scale;
@@ -9932,8 +9967,11 @@ OW.Game = (() => {
 
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
-    const w = Math.max(1, Math.round(window.innerWidth * dpr * renderScale * (isMobile() ? 1 : 1.6)));
-    const h = Math.max(1, Math.round(window.innerHeight * dpr * renderScale * (isMobile() ? 1 : 1.6)));
+    let w = Math.max(1, Math.round(window.innerWidth * dpr * renderScale * (isMobile() ? 1 : 1.6)));
+    let h = Math.max(1, Math.round(window.innerHeight * dpr * renderScale * (isMobile() ? 1 : 1.6)));
+    // never let the canvas get huge (consoles and 4K screens run out of GPU memory and the picture goes white)
+    const cap = quality === 'low' ? 700000 : quality === 'medium' ? 1100000 : 2000000;
+    if (w * h > cap) { const k = Math.sqrt(cap / (w * h)); w = Math.max(1, Math.round(w * k)); h = Math.max(1, Math.round(h * k)); }
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   }
 
@@ -10034,7 +10072,8 @@ OW.Game = (() => {
     const padStart = () => {
       if (!$('loading').hidden && !$('startBtns').hidden) {
         const pads = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) : [];
-        if (pads.some((p) => p.buttons[0] && p.buttons[0].pressed)) { start(false); return; }
+        const vp = OW.Input.virtualPad && OW.Input.virtualPad();
+        if (pads.some((p) => p.buttons[0] && p.buttons[0].pressed) || (vp && vp.buttons[0].pressed)) { start(false); return; }
         requestAnimationFrame(padStart);
       }
     };
