@@ -1,0 +1,29 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pad test</title>
+<style>body{background:#111;color:#fff;font:20px/1.4 system-ui,sans-serif;margin:0;padding:16px}h1{font-size:26px;margin:0 0 8px}.b{display:inline-block;min-width:54px;margin:3px;padding:8px;border-radius:8px;background:#333;text-align:center}.on{background:#2fb344}pre{white-space:pre-wrap;background:#1c1c1c;padding:10px;border-radius:8px}</style></head><body>
+<h1>Controller test</h1>
+<div id="info">Press any button on the controller...</div>
+<div id="btns"></div><pre id="axes"></pre><pre id="log"></pre>
+<script>
+var logEl=document.getElementById('log'),lines=[];
+function log(t){lines.unshift(t);lines.length=Math.min(lines.length,8);logEl.textContent=lines.join('\n')}
+log('Browser: '+navigator.userAgent);
+log('getGamepads available: '+(!!navigator.getGamepads));
+addEventListener('gamepadconnected',function(e){log('CONNECTED: '+e.gamepad.id+' mapping='+e.gamepad.mapping)});
+addEventListener('gamepaddisconnected',function(e){log('DISCONNECTED: '+e.gamepad.id)});
+addEventListener('keydown',function(e){e.preventDefault();log('KEY key=['+e.key+'] code=['+e.code+'] keyCode='+e.keyCode)});
+addEventListener('pointerdown',function(e){log('POINTER: '+e.pointerType)});
+function tick(){
+  var pads=[];try{pads=navigator.getGamepads?navigator.getGamepads():[]}catch(e){log('getGamepads error: '+e.message)}
+  var p=null;for(var i=0;i<pads.length;i++)if(pads[i]){p=pads[i];break}
+  var info=document.getElementById('info'),bt=document.getElementById('btns'),ax=document.getElementById('axes');
+  if(!p){info.textContent='No controller seen by the page yet. Press a button.';bt.innerHTML='';ax.textContent=''}
+  else{
+    info.textContent='Controller: '+p.id+' | mapping: '+(p.mapping||'(none)')+' | '+p.buttons.length+' buttons, '+p.axes.length+' axes';
+    var h='';for(var j=0;j<p.buttons.length;j++){h+='<span class="b'+(p.buttons[j].pressed?' on':'')+'">'+j+'</span>'}
+    bt.innerHTML=h;
+    ax.textContent='Axes: '+p.axes.map(function(a){return a.toFixed(2)}).join('  ');
+  }
+  requestAnimationFrame(tick)
+}
+tick();
+</script></body></html>
